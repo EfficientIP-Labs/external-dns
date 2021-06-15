@@ -1,13 +1,13 @@
 package efficientip
 
 import (
-	eip "EIPClient"
 	"context"
 	"crypto/tls"
 	"net/http"
 	"strconv"
 
 	log "github.com/sirupsen/logrus"
+	eip "sdsclient"
 
 	"sigs.k8s.io/external-dns/endpoint"
 	"sigs.k8s.io/external-dns/plan"
@@ -76,7 +76,7 @@ func (p *EfficientIPProvider) NewZoneAuth(zone eip.DnsZoneDataData) *ZoneAuth {
 	}
 }
 
-func (p *EfficientIPProvider) Zones(ctx context.Context) ([]*ZoneAuth, error) {
+func (p *EfficientIPProvider) Zones(_ context.Context) ([]*ZoneAuth, error) {
 	var result []*ZoneAuth
 
 	zones, _, err := p.client.DnsApi.DnsZoneList(p.context).Execute()
@@ -101,12 +101,13 @@ func (p *EfficientIPProvider) Zones(ctx context.Context) ([]*ZoneAuth, error) {
 
 // Records gets the current records.
 func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoint.Endpoint, _ error) {
-	log.Debug("Using EfficientIP")
+	log.Debug("Get Record list from EfficientIP SOLIDserver")
 
 	var result []*endpoint.Endpoint
 
 	zones, err := p.Zones(ctx)
 	if err != nil {
+		log.Errorf("Failed to get Zone list from EfficientIP SOLIDserver")
 		return nil, err
 	}
 
@@ -117,24 +118,99 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 			return nil, err
 		}
 
+		Host := make(map[string]*endpoint.Endpoint)
 		for _, rr := range *records.Data {
-
 			switch rr.GetRrType() {
 			case "A":
+				if h, found := Host[rr.GetRrFullName()+":"+rr.GetRrType()]; found {
+					h.Targets = append(h.Targets, rr.GetRrValueAddressAddr())
+				} else {
+					Host[rr.GetRrFullName()+":"+rr.GetRrType()] = endpoint.NewEndpoint(rr.GetRrFullName(), rr.GetRrType(), rr.GetRrValueAddressAddr())
+				}
 			case "TXT":
 			case "CNAME":
 			default:
+				endpoints = append(result, endpoint.NewEndpoint(rr.GetRrFullName(), rr.GetRrType(), rr.GetRrValue1()))
 			}
 		}
+		for _, rr := range Host {
+			endpoints = append(result, rr)
+		}
 	}
-	//endpoints = append(endpoints, endpoint.NewEndpoint(res.Name, endpoint.RecordTypeA, ip.Ipv4Addr))
+
 	return endpoints, nil
+}
+
+func (p *EfficientIPProvider) DeleteChanges(_ context.Context, changes *endpoint.Endpoint) error {
+	for _, value := range changes.Targets {
+		if p.dryRun {
+			log.Infof("Would delete %s record named '%s' to '%s' for Efficientip",
+				changes.RecordType,
+				changes.DNSName,
+				value,
+			)
+			continue
+		}
+		_, _, err := p.client.DnsApi.DnsRrDelete(p.context).RrName(changes.DNSName).RrType(changes.RecordType).RrValue1(value).Execute()
+		if err.Error() != "" {
+			log.Errorf("Deletion of the RR %v %v -> %v : failed!", changes.RecordType, changes.DNSName, value)
+		}
+	}
+	return nil
+}
+
+func (p *EfficientIPProvider) CreateChanges(_ context.Context, changes *endpoint.Endpoint) error {
+	for _, value := range changes.Targets {
+		if p.dryRun {
+			log.Infof("Would create %s record named '%s' to '%s' for Efficientip",
+				changes.RecordType,
+				changes.DNSName,
+				value,
+			)
+			continue
+		}
+		_, _, err := p.client.DnsApi.DnsRrAdd(p.context).DnsRrAddInput(eip.DnsRrAddInput{
+			RrName:   &changes.DNSName,
+			RrType:   &changes.RecordType,
+			RrValue1: &value,
+		}).Execute()
+
+		if err.Error() != "" {
+			log.Errorf("Creation of the RR %v %v -> %v : failed!", changes.RecordType, changes.DNSName, value)
+		}
+	}
+	return nil
 }
 
 // ApplyChanges applies the given changes.
 func (p *EfficientIPProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
-	panic("implement me")
 
+	for _, change := range changes.Delete {
+		err := p.DeleteChanges(ctx, change)
+		if err != nil {
+			return err
+		}
+	}
+	for _, change := range changes.UpdateOld {
+		err := p.DeleteChanges(ctx, change)
+		if err != nil {
+			return err
+		}
+	}
+	for _, change := range changes.UpdateNew {
+		err := p.CreateChanges(ctx, change)
+		if err != nil {
+			return err
+		}
+	}
+	for _, change := range changes.Create {
+		err := p.CreateChanges(ctx, change)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (p *EfficientIPProvider) PropertyValuesEqual(name string, previous string, current string) bool {
