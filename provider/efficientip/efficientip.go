@@ -98,11 +98,11 @@ func (p *EfficientIPProvider) Zones(_ context.Context) ([]*ZoneAuth, error) {
 
 	zones, _, err := p.client.DnsApi.DnsZoneList(p.context).Execute()
 
-	if err.Error() != "" {
+	if err.Error() != "" && !zones.GetSuccess() {
 		return nil, err
 	}
 
-	for _, zone := range *zones.Data {
+	for _, zone := range zones.GetData() {
 		if !p.domainFilter.Match(zone.GetZoneName()) {
 			log.Debugf("Ignore zone [%s] by domainFilter", zone.GetZoneName())
 			continue
@@ -128,13 +128,13 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 
 	for _, zone := range zones {
 		records, _, err := p.client.DnsApi.DnsRrList(p.context).Where("zone_id=" + zone.ID).Orderby("rr_full_name").Execute()
-		if err.Error() != "" {
+		if err.Error() != "" && !records.GetSuccess() {
 			log.Errorf("Failed to get RRs for zone [%s]", zone.Name)
 			return nil, err
 		}
 
 		Host := make(map[string]*endpoint.Endpoint)
-		for _, rr := range *records.Data {
+		for _, rr := range records.GetData() {
 			ttl, _ := strconv.Atoi(rr.GetRrTtl())
 
 			switch rr.GetRrType() {
