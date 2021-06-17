@@ -98,7 +98,7 @@ func (p *EfficientIPProvider) Zones(_ context.Context) ([]*ZoneAuth, error) {
 
 	zones, _, err := p.client.DnsApi.DnsZoneList(p.context).Execute()
 
-	if err.Error() != "" && !zones.GetSuccess() {
+	if err.Error() != "" && (!zones.HasSuccess() || !zones.GetSuccess()) {
 		return nil, err
 	}
 
@@ -128,7 +128,7 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 
 	for _, zone := range zones {
 		records, _, err := p.client.DnsApi.DnsRrList(p.context).Where("zone_id=" + zone.ID).Orderby("rr_full_name").Execute()
-		if err.Error() != "" && !records.GetSuccess() {
+		if err.Error() != "" && (!records.HasSuccess() || !records.GetSuccess()) {
 			log.Errorf("Failed to get RRs for zone [%s]", zone.Name)
 			return nil, err
 		}
