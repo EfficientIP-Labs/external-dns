@@ -45,6 +45,7 @@ type Config struct {
 	APIServerURL                      string
 	KubeConfig                        string
 	RequestTimeout                    time.Duration
+	DefaultTargets                    []string
 	ContourLoadBalancerService        string
 	GlooNamespace                     string
 	SkipperRouteGroupVersion          string
@@ -105,6 +106,7 @@ type Config struct {
 	InfobloxSSLVerify                 bool
 	InfobloxView                      string
 	InfobloxMaxResults                int
+	InfobloxFQDNRegEx                 string
 	DynCustomerName                   string
 	DynUsername                       string
 	DynPassword                       string `secure:"yes"`
@@ -178,6 +180,7 @@ var defaultConfig = &Config{
 	APIServerURL:                "",
 	KubeConfig:                  "",
 	RequestTimeout:              time.Second * 30,
+	DefaultTargets:              []string{},
 	ContourLoadBalancerService:  "heptio-contour/contour",
 	GlooNamespace:               "gloo-system",
 	SkipperRouteGroupVersion:    "zalando.org/v1",
@@ -233,6 +236,7 @@ var defaultConfig = &Config{
 	InfobloxSSLVerify:           true,
 	InfobloxView:                "",
 	InfobloxMaxResults:          0,
+	InfobloxFQDNRegEx:           "",
 	EfficientIPHost:             "",
 	EfficientIPPort:             443,
 	EfficientIPUsername:         "ipmadmin",
@@ -358,7 +362,7 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("skipper-routegroup-groupversion", "The resource version for skipper routegroup").Default(source.DefaultRoutegroupVersion).StringVar(&cfg.SkipperRouteGroupVersion)
 
 	// Flags related to processing sources
-	app.Flag("source", "The resource types that are queried for endpoints; specify multiple times for multiple sources (required, options: service, ingress, node, fake, connector, istio-gateway, istio-virtualservice, cloudfoundry, contour-ingressroute, contour-httpproxy, gloo-proxy, crd, empty, skipper-routegroup, openshift-route, ambassador-host)").Required().PlaceHolder("source").EnumsVar(&cfg.Sources, "service", "ingress", "node", "pod", "istio-gateway", "istio-virtualservice", "cloudfoundry", "contour-ingressroute", "contour-httpproxy", "gloo-proxy", "fake", "connector", "crd", "empty", "skipper-routegroup", "openshift-route", "ambassador-host")
+	app.Flag("source", "The resource types that are queried for endpoints; specify multiple times for multiple sources (required, options: service, ingress, node, fake, connector, istio-gateway, istio-virtualservice, cloudfoundry, contour-ingressroute, contour-httpproxy, gloo-proxy, crd, empty, skipper-routegroup, openshift-route, ambassador-host, kong-tcpingress)").Required().PlaceHolder("source").EnumsVar(&cfg.Sources, "service", "ingress", "node", "pod", "istio-gateway", "istio-virtualservice", "cloudfoundry", "contour-ingressroute", "contour-httpproxy", "gloo-proxy", "fake", "connector", "crd", "empty", "skipper-routegroup", "openshift-route", "ambassador-host", "kong-tcpingress")
 	app.Flag("namespace", "Limit sources of endpoints to a specific namespace (default: all namespaces)").Default(defaultConfig.Namespace).StringVar(&cfg.Namespace)
 	app.Flag("annotation-filter", "Filter sources managed by external-dns via annotation using label selector semantics (default: all sources)").Default(defaultConfig.AnnotationFilter).StringVar(&cfg.AnnotationFilter)
 	app.Flag("label-filter", "Filter sources managed by external-dns via label selector when listing all resources; currently only supported by source CRD").Default(defaultConfig.LabelFilter).StringVar(&cfg.LabelFilter)
@@ -366,7 +370,7 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("combine-fqdn-annotation", "Combine FQDN template and Annotations instead of overwriting").BoolVar(&cfg.CombineFQDNAndAnnotation)
 	app.Flag("ignore-hostname-annotation", "Ignore hostname annotation when generating DNS names, valid only when using fqdn-template is set (optional, default: false)").BoolVar(&cfg.IgnoreHostnameAnnotation)
 	app.Flag("ignore-ingress-tls-spec", "Ignore tls spec section in ingresses resources, applicable only for ingress sources (optional, default: false)").BoolVar(&cfg.IgnoreIngressTLSSpec)
-	app.Flag("compatibility", "Process annotation semantics from legacy implementations (optional, options: mate, molecule)").Default(defaultConfig.Compatibility).EnumVar(&cfg.Compatibility, "", "mate", "molecule")
+	app.Flag("compatibility", "Process annotation semantics from legacy implementations (optional, options: mate, molecule, kops-dns-controller)").Default(defaultConfig.Compatibility).EnumVar(&cfg.Compatibility, "", "mate", "molecule", "kops-dns-controller")
 	app.Flag("publish-internal-services", "Allow external-dns to publish DNS records for ClusterIP services (optional)").BoolVar(&cfg.PublishInternal)
 	app.Flag("publish-host-ip", "Allow external-dns to publish host-ip for headless services (optional)").BoolVar(&cfg.PublishHostIP)
 	app.Flag("always-publish-not-ready-addresses", "Always publish also not ready addresses for headless services (optional)").BoolVar(&cfg.AlwaysPublishNotReadyAddresses)
@@ -375,9 +379,10 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("crd-source-kind", "Kind of the CRD for the crd source in API group and version specified by crd-source-apiversion").Default(defaultConfig.CRDSourceKind).StringVar(&cfg.CRDSourceKind)
 	app.Flag("service-type-filter", "The service types to take care about (default: all, expected: ClusterIP, NodePort, LoadBalancer or ExternalName)").StringsVar(&cfg.ServiceTypeFilter)
 	app.Flag("managed-record-types", "Comma separated list of record types to manage (default: A, CNAME) (supported records: CNAME, A, NS").Default("A", "CNAME").StringsVar(&cfg.ManagedDNSRecordTypes)
+	app.Flag("default-targets", "Set globally default IP address that will apply as a target instead of source addresses. Specify multiple times for multiple targets (optional)").StringsVar(&cfg.DefaultTargets)
 
 	// Flags related to providers
-	app.Flag("provider", "The DNS provider where the DNS records will be created (required, options: aws, aws-sd, godaddy, google, azure, azure-dns, azure-private-dns, bluecat, cloudflare, rcodezero, digitalocean, hetzner, dnsimple, akamai, infoblox, dyn, efficientip, designate, coredns, skydns, inmemory, ovh, pdns, oci, exoscale, linode, rfc2136, ns1, transip, vinyldns, rdns, scaleway, vultr, ultradns)").Required().PlaceHolder("provider").EnumVar(&cfg.Provider, "aws", "aws-sd", "google", "azure", "azure-dns", "hetzner", "azure-private-dns", "alibabacloud", "cloudflare", "rcodezero", "digitalocean", "dnsimple", "akamai", "infoblox", "dyn", "efficientip", "designate", "coredns", "skydns", "inmemory", "ovh", "pdns", "oci", "exoscale", "linode", "rfc2136", "ns1", "transip", "vinyldns", "rdns", "scaleway", "vultr", "ultradns", "godaddy", "bluecat")
+	app.Flag("provider", "The DNS provider where the DNS records will be created (required, options: aws, aws-sd, godaddy, google, azure, azure-dns, azure-private-dns, bluecat, cloudflare, rcodezero, digitalocean, hetzner, dnsimple, akamai, infoblox, dyn, efficientip, designate, coredns, skydns, inmemory, ovh, pdns, oci, exoscale, linode, rfc2136, ns1, transip, vinyldns, rdns, scaleway, vultr, ultradns)").Required().PlaceHolder("provider").EnumVar(&cfg.Provider, "aws", "aws-sd", "google", "azure", "azure-dns", "hetzner", "azure-private-dns", "alibabacloud", "cloudflare", "rcodezero", "digitalocean", "dnsimple", "akamai", "infoblox", "dyn", "efficientip", "designate", "coredns", "skydns", "inmemory", "ovh", "pdns", "oci", "exoscale", "linode", "rfc2136", "ns1", "transip", "vinyldns", "rdns", "scaleway", "vultr", "ultradns", "godaddy", "bluecat", "gandi")
 	app.Flag("domain-filter", "Limit possible target zones by a domain suffix; specify multiple times for multiple domains (optional)").Default("").StringsVar(&cfg.DomainFilter)
 	app.Flag("exclude-domains", "Exclude subdomains (optional)").Default("").StringsVar(&cfg.ExcludeDomains)
 	app.Flag("regex-domain-filter", "Limit possible domains and target zones by a Regex filter; Overrides domain-filter (optional)").Default(defaultConfig.RegexDomainFilter.String()).RegexpVar(&cfg.RegexDomainFilter)
@@ -420,6 +425,7 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("infoblox-ssl-verify", "When using the Infoblox provider, specify whether to verify the SSL certificate (default: true, disable with --no-infoblox-ssl-verify)").Default(strconv.FormatBool(defaultConfig.InfobloxSSLVerify)).BoolVar(&cfg.InfobloxSSLVerify)
 	app.Flag("infoblox-view", "DNS view (default: \"\")").Default(defaultConfig.InfobloxView).StringVar(&cfg.InfobloxView)
 	app.Flag("infoblox-max-results", "Add _max_results as query parameter to the URL on all API requests. The default is 0 which means _max_results is not set and the default of the server is used.").Default(strconv.Itoa(defaultConfig.InfobloxMaxResults)).IntVar(&cfg.InfobloxMaxResults)
+	app.Flag("infoblox-fqdn-regex", "Apply this regular expression as a filter for obtaining zone_auth objects. This is disabled by default.").Default(defaultConfig.InfobloxFQDNRegEx).StringVar(&cfg.InfobloxFQDNRegEx)
 	app.Flag("dyn-customer-name", "When using the Dyn provider, specify the Customer Name").Default("").StringVar(&cfg.DynCustomerName)
 	app.Flag("dyn-username", "When using the Dyn provider, specify the Username").Default("").StringVar(&cfg.DynUsername)
 	app.Flag("dyn-password", "When using the Dyn provider, specify the password").Default("").StringVar(&cfg.DynPassword)

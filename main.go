@@ -48,6 +48,7 @@ import (
 	"sigs.k8s.io/external-dns/provider/dyn"
 	"sigs.k8s.io/external-dns/provider/efficientip"
 	"sigs.k8s.io/external-dns/provider/exoscale"
+	"sigs.k8s.io/external-dns/provider/gandi"
 	"sigs.k8s.io/external-dns/provider/godaddy"
 	"sigs.k8s.io/external-dns/provider/google"
 	"sigs.k8s.io/external-dns/provider/hetzner"
@@ -125,6 +126,7 @@ func main() {
 		GlooNamespace:                  cfg.GlooNamespace,
 		SkipperRouteGroupVersion:       cfg.SkipperRouteGroupVersion,
 		RequestTimeout:                 cfg.RequestTimeout,
+		DefaultTargets:                 cfg.DefaultTargets,
 	}
 
 	// Lookup all the selected sources by names and pass them the desired configuration.
@@ -144,7 +146,7 @@ func main() {
 	}
 
 	// Combine multiple sources into a single, deduplicated source.
-	endpointsSource := source.NewDedupSource(source.NewMultiSource(sources))
+	endpointsSource := source.NewDedupSource(source.NewMultiSource(sources, sourceCfg.DefaultTargets))
 
 	// RegexDomainFilter overrides DomainFilter
 	var domainFilter endpoint.DomainFilter
@@ -241,6 +243,7 @@ func main() {
 				View:         cfg.InfobloxView,
 				MaxResults:   cfg.InfobloxMaxResults,
 				DryRun:       cfg.DryRun,
+				FQDNRexEx:    cfg.InfobloxFQDNRegEx,
 			},
 		)
 	case "dyn":
@@ -325,6 +328,8 @@ func main() {
 		p, err = scaleway.NewScalewayProvider(ctx, domainFilter, cfg.DryRun)
 	case "godaddy":
 		p, err = godaddy.NewGoDaddyProvider(ctx, domainFilter, cfg.GoDaddyTTL, cfg.GoDaddyAPIKey, cfg.GoDaddySecretKey, cfg.GoDaddyOTE, cfg.DryRun)
+	case "gandi":
+		p, err = gandi.NewGandiProvider(ctx, domainFilter, cfg.DryRun)
 	default:
 		log.Fatalf("unknown dns provider: %s", cfg.Provider)
 	}
