@@ -42,12 +42,118 @@ type EfficientIPConfig struct {
 	SSlVerify    bool
 }
 
+type EfficientipClient interface {
+	ZonesList() ([]*ZoneAuth, error)
+	RecordAdd(rr *endpoint.Endpoint) error
+	RecordDelete(rr *endpoint.Endpoint) error
+	RecordList(Zone ZoneAuth) (endpoints []*endpoint.Endpoint, _ error)
+}
+
+func NewEfficientipAPI(config *eip.Configuration, ctx context.Context) EfficientIPAPI {
+	return EfficientIPAPI{
+		client:  eip.NewAPIClient(config),
+		context: ctx,
+	}
+}
+
+type EfficientIPAPI struct {
+	client  *eip.APIClient
+	context context.Context
+}
+
+func (e *EfficientIPAPI) ZonesList() ([]*ZoneAuth, error) {
+	zones, _, err := e.client.DnsApi.DnsZoneList(e.context).Execute()
+
+	if err.Error() != "" && (!zones.HasSuccess() || !zones.GetSuccess()) {
+		return nil, err
+	}
+	var result []*ZoneAuth
+	for _, zone := range zones.GetData() {
+		result = append(result, NewZoneAuth(zone))
+	}
+	return result, nil
+}
+
+func (e *EfficientIPAPI) RecordAdd(rr *endpoint.Endpoint) error {
+	for _, value := range rr.Targets {
+		log.Infof("Creating %s record named '%s' to '%s' for Efficientip",
+			rr.RecordType,
+			rr.DNSName,
+			value,
+		)
+
+		ttl := int32(rr.RecordTTL)
+		_, _, err := e.client.DnsApi.DnsRrAdd(e.context).DnsRrAddInput(eip.DnsRrAddInput{
+			RrName:   &rr.DNSName,
+			RrType:   &rr.RecordType,
+			RrTtl:    &ttl,
+			RrValue1: &value,
+		}).Execute()
+
+		if err.Error() != "" {
+			log.Errorf("Creation of the RR %v %v  [%v]-> %v : failed!", rr.RecordType, rr.DNSName, ttl, value)
+		}
+	}
+	return nil
+}
+
+func (e *EfficientIPAPI) RecordDelete(rr *endpoint.Endpoint) error {
+	for _, value := range rr.Targets {
+		log.Infof("Deleting %s record named '%s' to '%s' for Efficientip",
+			rr.RecordType,
+			rr.DNSName,
+			value,
+		)
+
+		_, _, err := e.client.DnsApi.DnsRrDelete(e.context).RrName(rr.DNSName).RrType(rr.RecordType).RrValue1(value).Execute()
+		if err.Error() != "" {
+			log.Errorf("Deletion of the RR %v %v -> %v : failed!", rr.RecordType, rr.DNSName, value)
+		}
+	}
+	return nil
+}
+
+func (e *EfficientIPAPI) RecordList(Zone ZoneAuth) (endpoints []*endpoint.Endpoint, _ error) {
+
+	records, _, err := e.client.DnsApi.DnsRrList(e.context).Where("zone_id=" + Zone.ID).Orderby("rr_full_name").Execute()
+	if err.Error() != "" && (!records.HasSuccess() || !records.GetSuccess()) {
+		log.Errorf("Failed to get RRs for zone [%s]", Zone.Name)
+		return nil, err
+	}
+
+	Host := make(map[string]*endpoint.Endpoint)
+	for _, rr := range records.GetData() {
+		ttl, _ := strconv.Atoi(rr.GetRrTtl())
+
+		switch rr.GetRrType() {
+		case "A":
+			log.Debugf("Found A Record : %s -> %s", rr.GetRrFullName(), rr.GetRrAllValue())
+			if h, found := Host[rr.GetRrFullName()+":"+rr.GetRrType()]; found {
+				h.Targets = append(h.Targets, rr.GetRrAllValue())
+			} else {
+				Host[rr.GetRrFullName()+":"+rr.GetRrType()] = endpoint.NewEndpointWithTTL(rr.GetRrFullName(), endpoint.RecordTypeA, endpoint.TTL(ttl), rr.GetRrAllValue())
+			}
+		case "TXT":
+			log.Debugf("Found TXT Record : %s -> %s", rr.GetRrFullName(), rr.GetRrAllValue())
+			tmp := endpoint.NewEndpointWithTTL(rr.GetRrFullName(), endpoint.RecordTypeTXT, endpoint.TTL(ttl), rr.GetRrAllValue())
+			endpoints = append(endpoints, tmp)
+		default:
+			log.Debugf("Found %s Record : %s -> %s", rr.GetRrType(), rr.GetRrFullName(), rr.GetRrAllValue())
+			endpoints = append(endpoints, endpoint.NewEndpointWithTTL(rr.GetRrFullName(), rr.GetRrType(), endpoint.TTL(ttl), rr.GetRrAllValue()))
+		}
+	}
+	for _, rr := range Host {
+		endpoints = append(endpoints, rr)
+	}
+	return endpoints, nil
+}
+
 type EfficientIPProvider struct {
 	provider.BaseProvider
 	domainFilter endpoint.DomainFilter
 	zoneIDFilter provider.ZoneIDFilter
 	dryRun       bool
-	client       *eip.APIClient
+	client       EfficientipClient
 	context      context.Context
 }
 
@@ -59,7 +165,7 @@ func NewEfficientIPProvider(config EfficientIPConfig) (*EfficientIPProvider, err
 		clientConfig.HTTPClient = &http.Client{Transport: customTransport}
 	}
 
-	client := eip.NewAPIClient(clientConfig)
+	//client := eip.NewAPIClient(clientConfig)
 	ctx := context.WithValue(context.Background(), eip.ContextBasicAuth, eip.BasicAuth{
 		UserName: config.Username,
 		Password: config.Password,
@@ -68,12 +174,13 @@ func NewEfficientIPProvider(config EfficientIPConfig) (*EfficientIPProvider, err
 		"your_solidserver_fqdn": config.Host,
 		"port":                  strconv.Itoa(config.Port),
 	})
+	client := NewEfficientipAPI(clientConfig, ctx)
 
 	eipProvider := &EfficientIPProvider{
 		domainFilter: config.DomainFilter,
 		zoneIDFilter: config.ZoneIDFilter,
 		dryRun:       config.DryRun,
-		client:       client,
+		client:       &client,
 		context:      ctx,
 	}
 	return eipProvider, nil
@@ -85,7 +192,7 @@ type ZoneAuth struct {
 	ID   string
 }
 
-func (p *EfficientIPProvider) NewZoneAuth(zone eip.DnsZoneDataData) *ZoneAuth {
+func NewZoneAuth(zone eip.DnsZoneDataData) *ZoneAuth {
 	return &ZoneAuth{
 		Name: zone.GetZoneName(),
 		Type: zone.GetZoneType(),
@@ -96,22 +203,22 @@ func (p *EfficientIPProvider) NewZoneAuth(zone eip.DnsZoneDataData) *ZoneAuth {
 func (p *EfficientIPProvider) Zones(_ context.Context) ([]*ZoneAuth, error) {
 	var result []*ZoneAuth
 
-	zones, _, err := p.client.DnsApi.DnsZoneList(p.context).Execute()
+	zones, err := p.client.ZonesList()
 
-	if err.Error() != "" && (!zones.HasSuccess() || !zones.GetSuccess()) {
+	if err != nil {
 		return nil, err
 	}
 
-	for _, zone := range zones.GetData() {
-		if !p.domainFilter.Match(zone.GetZoneName()) {
-			log.Debugf("Ignore zone [%s] by domainFilter", zone.GetZoneName())
+	for _, zone := range zones {
+		if !p.domainFilter.Match(zone.Name) {
+			log.Debugf("Ignore zone [%s] by domainFilter", zone.Name)
 			continue
 		}
-		if !p.zoneIDFilter.Match(zone.GetZoneId()) {
-			log.Debugf("Ignore zone [%s][%s] by zoneIDFilter", zone.GetZoneName(), zone.GetZoneId())
+		if !p.zoneIDFilter.Match(zone.ID) {
+			log.Debugf("Ignore zone [%s][%s] by zoneIDFilter", zone.Name, zone.ID)
 			continue
 		}
-		result = append(result, p.NewZoneAuth(zone))
+		result = append(result, zone)
 	}
 	return result, nil
 }
@@ -127,34 +234,12 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 	}
 
 	for _, zone := range zones {
-		records, _, err := p.client.DnsApi.DnsRrList(p.context).Where("zone_id=" + zone.ID).Orderby("rr_full_name").Execute()
-		if err.Error() != "" && (!records.HasSuccess() || !records.GetSuccess()) {
-			log.Errorf("Failed to get RRs for zone [%s]", zone.Name)
+		records, err := p.client.RecordList(*zone)
+
+		if err != nil {
 			return nil, err
 		}
-
-		Host := make(map[string]*endpoint.Endpoint)
-		for _, rr := range records.GetData() {
-			ttl, _ := strconv.Atoi(rr.GetRrTtl())
-
-			switch rr.GetRrType() {
-			case "A":
-				log.Debugf("Found A Record : %s -> %s", rr.GetRrFullName(), rr.GetRrAllValue())
-				if h, found := Host[rr.GetRrFullName()+":"+rr.GetRrType()]; found {
-					h.Targets = append(h.Targets, rr.GetRrAllValue())
-				} else {
-					Host[rr.GetRrFullName()+":"+rr.GetRrType()] = endpoint.NewEndpointWithTTL(rr.GetRrFullName(), endpoint.RecordTypeA, endpoint.TTL(ttl), rr.GetRrAllValue())
-				}
-			case "TXT":
-				log.Debugf("Found TXT Record : %s -> %s", rr.GetRrFullName(), rr.GetRrAllValue())
-				tmp := endpoint.NewEndpointWithTTL(rr.GetRrFullName(), endpoint.RecordTypeTXT, endpoint.TTL(ttl), rr.GetRrAllValue())
-				endpoints = append(endpoints, tmp)
-			default:
-				log.Debugf("Found %s Record : %s -> %s", rr.GetRrType(), rr.GetRrFullName(), rr.GetRrAllValue())
-				endpoints = append(endpoints, endpoint.NewEndpointWithTTL(rr.GetRrFullName(), rr.GetRrType(), endpoint.TTL(ttl), rr.GetRrAllValue()))
-			}
-		}
-		for _, rr := range Host {
+		for _, rr := range records {
 			endpoints = append(endpoints, rr)
 		}
 	}
@@ -163,59 +248,32 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 }
 
 func (p *EfficientIPProvider) DeleteChanges(_ context.Context, changes *endpoint.Endpoint) error {
-	for _, value := range changes.Targets {
-		if p.dryRun {
+	if p.dryRun {
+		for _, value := range changes.Targets {
 			log.Infof("Would delete %s record named '%s' to '%s' for Efficientip",
 				changes.RecordType,
 				changes.DNSName,
 				value,
 			)
-			continue
 		}
-
-		log.Infof("Deleting %s record named '%s' to '%s' for Efficientip",
-			changes.RecordType,
-			changes.DNSName,
-			value,
-		)
-
-		_, _, err := p.client.DnsApi.DnsRrDelete(p.context).RrName(changes.DNSName).RrType(changes.RecordType).RrValue1(value).Execute()
-		if err.Error() != "" {
-			log.Errorf("Deletion of the RR %v %v -> %v : failed!", changes.RecordType, changes.DNSName, value)
-		}
+		return nil
 	}
+	_ = p.client.RecordDelete(changes)
 	return nil
 }
 
 func (p *EfficientIPProvider) CreateChanges(_ context.Context, changes *endpoint.Endpoint) error {
-	for _, value := range changes.Targets {
-		if p.dryRun {
+	if p.dryRun {
+		for _, value := range changes.Targets {
 			log.Infof("Would create %s record named '%s' to '%s' for Efficientip",
 				changes.RecordType,
 				changes.DNSName,
 				value,
 			)
-			continue
 		}
-
-		log.Infof("Creating %s record named '%s' to '%s' for Efficientip",
-			changes.RecordType,
-			changes.DNSName,
-			value,
-		)
-
-		ttl := int32(changes.RecordTTL)
-		_, _, err := p.client.DnsApi.DnsRrAdd(p.context).DnsRrAddInput(eip.DnsRrAddInput{
-			RrName:   &changes.DNSName,
-			RrType:   &changes.RecordType,
-			RrTtl:    &ttl,
-			RrValue1: &value,
-		}).Execute()
-
-		if err.Error() != "" {
-			log.Errorf("Creation of the RR %v %v  [%v]-> %v : failed!", changes.RecordType, changes.DNSName, ttl, value)
-		}
+		return nil
 	}
+	_ = p.client.RecordAdd(changes)
 	return nil
 }
 
