@@ -49,7 +49,7 @@ type EfficientipClient interface {
 	RecordList(Zone ZoneAuth) (endpoints []*endpoint.Endpoint, _ error)
 }
 
-func NewEfficientipAPI(config *eip.Configuration, ctx context.Context) EfficientIPAPI {
+func NewEfficientipAPI(ctx context.Context, config *eip.Configuration) EfficientIPAPI {
 	return EfficientIPAPI{
 		client:  eip.NewAPIClient(config),
 		context: ctx,
@@ -114,7 +114,6 @@ func (e *EfficientIPAPI) RecordDelete(rr *endpoint.Endpoint) error {
 }
 
 func (e *EfficientIPAPI) RecordList(Zone ZoneAuth) (endpoints []*endpoint.Endpoint, _ error) {
-
 	records, _, err := e.client.DnsApi.DnsRrList(e.context).Where("zone_id=" + Zone.ID).Orderby("rr_full_name").Execute()
 	if err.Error() != "" && (!records.HasSuccess() || !records.GetSuccess()) {
 		log.Errorf("Failed to get RRs for zone [%s]", Zone.Name)
@@ -174,7 +173,7 @@ func NewEfficientIPProvider(config EfficientIPConfig) (*EfficientIPProvider, err
 		"your_solidserver_fqdn": config.Host,
 		"port":                  strconv.Itoa(config.Port),
 	})
-	client := NewEfficientipAPI(clientConfig, ctx)
+	client := NewEfficientipAPI(ctx, clientConfig)
 
 	eipProvider := &EfficientIPProvider{
 		domainFilter: config.DomainFilter,
@@ -239,9 +238,7 @@ func (p *EfficientIPProvider) Records(ctx context.Context) (endpoints []*endpoin
 		if err != nil {
 			return nil, err
 		}
-		for _, rr := range records {
-			endpoints = append(endpoints, rr)
-		}
+		endpoints = append(endpoints, records...)
 	}
 
 	return endpoints, nil
