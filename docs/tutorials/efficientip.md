@@ -11,8 +11,8 @@ This tutorial assumes you have substituted the correct values for the following 
 ```
 export EFFICIENTIP_HOST=127.0.0.1
 export EFFICIENTIP_PORT=443
-export EFFICIENTIP_USERNAME=ipmadmin
-export EFFICIENTIP_PASSWORD=admin
+export EFFICIENTIP_USERNAME=username
+export EFFICIENTIP_PASSWORD=password
 ```
 
 ## Creating an EfficientIP DNS zone
@@ -243,9 +243,10 @@ This should show the external IP address of the service as the A record for your
 ## Clean up
 
 Now that we have verified that ExternalDNS will automatically manage EfficientIP DNS records, we can delete the tutorial's
-DNS zone:
-
+DNS zone and examples:
 ```
+$ kubectl delete service -f nginx.yaml
+$ kubectl delete service -f externaldns.yaml
 $ curl -kl \
       -X DELETE \
       -u ${EFFICIENTIP_USERNAME}:${EFFICIENTIP_PASSWORD} \
