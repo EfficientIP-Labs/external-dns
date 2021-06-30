@@ -51,6 +51,7 @@ ExternalDNS' current release is `v0.8`. This version allows you to keep selected
 * [Scaleway](https://www.scaleway.com)
 * [Akamai Edge DNS](https://learn.akamai.com/en-us/products/cloud_security/edge_dns.html)
 * [GoDaddy](https://www.godaddy.com)
+* [Gandi](https://www.gandi.net)
 
 From this release, ExternalDNS can become aware of the records it is managing (enabled via `--registry=txt`), therefore ExternalDNS can safely manage non-empty hosted zones. We strongly encourage you to use `v0.5` (or greater) with `--registry=txt` enabled and `--txt-owner-id` set to a unique value that doesn't change for the lifetime of your cluster. You might also want to run ExternalDNS in a dry run mode (`--dry-run` flag) to see the changes to be submitted to your DNS Provider API.
 
@@ -107,6 +108,7 @@ The following table clarifies the current status of the providers according to t
 | Vultr | Alpha | |
 | UltraDNS | Alpha | |
 | GoDaddy | Alpha | |
+| Gandi | Alpha | @packi |
 
 ## Running ExternalDNS:
 
@@ -161,6 +163,7 @@ The following tutorials are provided:
 * [Vultr](docs/tutorials/vultr.md)
 * [UltraDNS](docs/tutorials/ultradns.md)
 * [GoDaddy](docs/tutorials/godaddy.md)
+* [Gandi](docs/tutorials/gandi.md)
 
 ### Running Locally
 
@@ -277,14 +280,14 @@ Here's a rough outline on what is to come (subject to change):
 
 ### v0.6
 
-- [ ] Ability to replace Kops' [DNS Controller](https://github.com/kubernetes/kops/tree/HEAD/dns-controller) (This could also directly become `v1.0`)
+- [ ] Ability to replace kOps' [DNS Controller](https://github.com/kubernetes/kops/tree/HEAD/dns-controller) (This could also directly become `v1.0`)
 - [x] Support for OVH
 
 ### v1.0
 
-- [ ] Ability to replace Kops' [DNS Controller](https://github.com/kubernetes/kops/tree/HEAD/dns-controller)
+- [ ] Ability to replace kOps' [DNS Controller](https://github.com/kubernetes/kops/tree/HEAD/dns-controller)
 	- [x] Add support for pod source
-	- [ ] Add support for DNS Controller annotations for pod, ingress, and service sources
+	- [x] Add support for DNS Controller annotations for pod and service sources
 	- [ ] Add support for kOps gossip provider
 - [x] Ability to replace Zalando's [Mate](https://github.com/linki/mate)
 - [x] Ability to replace Molecule Software's [route53-kubernetes](https://github.com/wearemolecule/route53-kubernetes)
