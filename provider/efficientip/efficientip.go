@@ -24,7 +24,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	eip "sdsclient"
+	eip "github.com/efficientip-labs/solidserver-go-client/sdsclient"
 
 	"sigs.k8s.io/external-dns/endpoint"
 	"sigs.k8s.io/external-dns/plan"
